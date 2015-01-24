@@ -5,13 +5,17 @@ import (
 	"flag"
 	"log"
 	"net"
+	"time"
 
 	"github.com/heartszhang/rulematch"
 	"github.com/jeromer/syslogparser/rfc3164"
 )
 
-type packet map[string]interface{}
-type decoder func(string) packet
+type decoder func(string) doc
+
+type doc_decoder interface {
+	decode(string) (p doc, doctype string)
+}
 
 var rule_manager = struct {
 	tag_decoders  map[string]decoder
@@ -32,19 +36,31 @@ func build_rule_manager() {
 }
 
 var option = struct {
-	sock       string
-	redis_addr string
-	redis_port uint
-	verbose    bool
+	index_prefix           string
+	dft_type               string
+	sock                   string
+	redis_addr, els_domain string
+	redis_port, els_port   uint
+	zmq_addr               string
+	els_pool_num           int
+	verbose                bool
 }{
-	sock:       "localhost:4514",
-	redis_addr: "127.0.0.1",
-	redis_port: 6379,
+	sock:         "localhost:4514",
+	redis_addr:   "127.0.0.1",
+	redis_port:   6379,
+	els_domain:   "localhost",
+	els_port:     9200,
+	els_pool_num: 16,
+	index_prefix: "logstash",
+	dft_type:     "generic",
+	zmq_addr:     "ipc://stashlog.zmq.pull",
 }
 
 func init() {
 	flag.StringVar(&option.sock, "sock", option.sock, "rsyslog upstream socket")
+	flag.StringVar(&option.els_domain, "els-domain", option.els_domain, "elasticsearch working domain")
 	flag.BoolVar(&option.verbose, "verbose", option.verbose, "verbose mode")
+	option.index_prefix = option.index_prefix + "-" + time.Now().Format("20060102")
 	build_rule_manager()
 }
 
@@ -66,28 +82,30 @@ func main() {
 func handle_connection(conn net.Conn) {
 	log.Println("client-start", conn.RemoteAddr())
 	defer conn.Close()
-	packet_chan := make(chan packet, 32)
-	defer close(packet_chan)
-	go handle_syslog(packet_chan, conn)
+	doc_chan := make(chan doc, 32)
+	defer close(doc_chan)
+	//	go redis_pub(doc_chan, conn)
+	//	go zmq_push(doc_chan, conn)
+	go els_post(doc_chan, conn)
 	var err error
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() && err == nil {
-		err = rsyslog_publish(scanner.Bytes(), packet_chan)
+		err = rsyslog_publish(scanner.Bytes(), doc_chan)
 	}
 	log.Println("client-close", conn.RemoteAddr(), err)
 }
 
-func rsyslog_publish(data []byte, channel chan packet) (v error) {
+func rsyslog_publish(data []byte, channel chan doc) (v error) {
 	dec := rfc3164.NewParser(data) // why we use 3164?
-	var body packet
+	var body doc
 	if err := dec.Parse(); err == nil {
-		body = packet(dec.Dump())
+		body = doc(dec.Dump())
 		if body["tag"].(string) == "" {
 			body["tag"] = "default"
 		}
-		body = decode_content(body)
+		body = decode_document(body)
 	} else {
-		body = packet{
+		body = doc{
 			"tag":     "unknown",
 			"content": data,
 			"error":   err,
@@ -95,27 +113,6 @@ func rsyslog_publish(data []byte, channel chan packet) (v error) {
 	}
 	channel <- body
 	return v
-}
-
-func handle_syslog(channel chan packet, conn net.Conn) {
-	//	rediscli := redis.New()
-	//	err := rediscli.Connect(option.redis_addr, option.redis_port)
-	//	if err != nil {
-	//		conn.Close()
-	//		log.Println(err)
-	//		return
-	//	}
-	//	defer rediscli.Close()
-	for body := range channel {
-		log_packet(body)
-		//		channel := fmt.Sprintf("%v", body["tag"])
-		//		jbody, _ := json.Marshal(body)
-		//		if _, err = rediscli.Publish(channel, jbody); err != nil {
-		//			conn.Close()
-		//			log.Println(err)
-		//			break
-		//		}
-	}
 }
 
 /*
@@ -128,27 +125,30 @@ func handle_syslog(channel chan packet, conn net.Conn) {
    "severity":  p.priority.S.Value,
 */
 
-func decode_content(body packet) (v packet) {
-	v = decode_content_by_tag(body)
+func decode_document(body doc) (v doc) {
+	v = decode_document_by_tag(body)
 	if v == nil {
-		v = decode_content_by_words(body)
+		v = decode_document_by_words(body)
 	}
 	if v == nil {
-		v = packet{"content": body["content"]}
+		v = doc{"content": body["content"]}
 	}
 	v["tag"] = body["tag"]
 	v["hostname"] = body["hostname"]
+	if _, ok := v["type"].(string); !ok {
+		v["type"] = option.dft_type
+	}
 	return
 }
 
-func decode_content_by_tag(body packet) (v packet) {
+func decode_document_by_tag(body doc) (v doc) {
 	if decoder, ok := rule_manager.tag_decoders[body["tag"].(string)]; ok {
 		v = decoder(body["content"].(string))
 	}
 	return
 }
 
-func decode_content_by_words(body packet) (v packet) {
+func decode_document_by_words(body doc) (v doc) {
 	content := body["content"].(string)
 	rules := rule_manager._matcher.Match(content)
 	for _, idx := range rules {
@@ -160,7 +160,7 @@ func decode_content_by_words(body packet) (v packet) {
 	return v
 }
 
-func log_packet(p packet) {
+func log_document(p doc) {
 	if !option.verbose {
 		return
 	}
