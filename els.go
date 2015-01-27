@@ -22,9 +22,13 @@ func els_post(channel chan doc, conn net.Conn) {
 		if dtype, ok := doc["type"].(string); ok {
 			if _, err := els.Index(option.index_prefix, dtype, "", nil, doc); err != nil {
 				log.Println("index", doc, err)
-			} else {
-				//				log.Println(resp.Id)
 			}
 		}
+	}
+}
+
+func verbose(v ...interface{}) {
+	if option.verbose {
+		log.Println(v...)
 	}
 }

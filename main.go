@@ -111,7 +111,9 @@ func rsyslog_publish(data []byte, channel chan doc) (v error) {
 			"error":   err,
 		}
 	}
-	channel <- body
+	if len(body) > 0 {
+		channel <- body
+	}
 	return v
 }
 
@@ -132,6 +134,11 @@ func decode_document(body doc) (v doc) {
 	}
 	if v == nil {
 		v = doc{"content": body["content"]}
+		verbose(v)
+	}
+	// v would be ignored
+	if v != nil && len(v) == 0 {
+		return
 	}
 	v["tag"] = body["tag"]
 	v["hostname"] = body["hostname"]

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"log"
 	"regexp"
 	"strconv"
 	"strings"
@@ -14,85 +12,102 @@ func init() {
 	WordDecoder([]string{"GET", "HTTP/1.1"}, new_nginx_decoder())
 }
 
+//220.255.1.139 - - [27/Jan/2015:14:22:33 +0800] "-" 400 0 "-" "-"
 //118.254.176.199 - - [21/Jan/2015:13:27:22 +0800] "GET /firstGame/Android/funs0004/0.1.0.60_0.0.0.0.1/211/2a130f6b41ca86564b8428880733a399c/43ec1859-893d-45b9-942f-327236410a5e/70/24331/MissionBegin/3_9 HTTP/1.1" 200 151 "-" "-"
 //$remote_addr - $remote_user [$time_local] "$request" $status $body_bytes_sent "$http_referer" "$http_user_agent"
 const nginx_format = `(\d+\.\d+\.\d+\.\d+)\s\S+\s\S+\s\[([^\]]+)\]\s"(\S+)\s(\S+)\sHTTP/(\d+\.\d+)"\s(\d+)\s(\d+)\s"([^"]+)"\s"([^"]+)"`
 
+const nginx_format2 = `(\d+\.\d+\.\d+\.\d+)\s\S+\s\S+\s\[([^\]]+)\]\s"(\S+)"\s(\d+)\s(\d+)\s"(\S+)"\s(\S+)`
+
 type nginx_decoder struct {
-	re *regexp.Regexp
+	re, re2 *regexp.Regexp
 }
 
 var decoders map[string]func([]string) doc //= make(map[string]func([]string) doc)
 
 func new_nginx_decoder() decoder {
 	return nginx_decoder{
-		re: regexp.MustCompile(nginx_format),
+		re:  regexp.MustCompile(nginx_format),
+		re2: regexp.MustCompile(nginx_format2),
 	}.decode
 }
 
+func nginx_time(s string) interface{} {
+	const time_layout = `02/Jan/2006:15:04:05 -0700`
+	if v, err := time.Parse(time_layout, s); err == nil {
+		return v
+	}
+	return s
+}
 func (this nginx_decoder) decode(content string) (v doc) {
 	fields := this.re.FindStringSubmatch(content)
 	//remote_addr, time_local, request_method, request_url, request_ver, status, bytes_sent, http_refer, http_user_agent
 	if len(fields) >= 10 {
-		const time_layout = `02/Jan/2006:15:04:05 -0700`
-		v = make(doc)
-		v["remote"] = fields[1]
-		v["time"], _ = time.Parse(time_layout, fields[2])
-		v["verb"] = fields[3]
-		v["url"] = fields[4]
-		v["status"], _ = strconv.Atoi(fields[6])
-		v["sent"], _ = strconv.Atoi(fields[7])
-		v["http_refer"] = fields[8]
-		v["http_ua"] = fields[9]
-		v["type"] = "access"
+		v = doc{
+			"remote":     fields[1],
+			"time":       nginx_time(fields[2]), //time.Parse(time_layout, fields[2]),
+			"verb":       fields[3],
+			"url":        fields[4],
+			"status":     iconvert2(fields[6]), //strconv.Atoi(fields[6]),
+			"sent":       iconvert2(fields[7]), //strconv.Atoi(fields[7]),
+			"http_refer": fields[8],
+			"http_ua":    fields[9],
+			"type":       "nginx",
+		}
 		v.merge(decode_func(fields[4]))
+	} else if fields = this.re2.FindStringSubmatch(content); len(fields) >= 8 {
+		v = doc{}
 	}
 	return
 }
+
 func decode_version(v string) doc {
+	if fields := strings.Split(v, "_"); len(fields) >= 2 {
+		return doc{"version": fields[0], "resver": fields[1]}
+	}
 	return nil
 }
+
+//const sample = `/firstGame/Android/anzhi002/0.1.0.60_0.0.0.0.2/210/3ff4e3f1c3a71cd99bceeb891577b2fc2/anzhi_201501171417022I8S29P7dT/17/21537/MissionCompleted/12_3`
+///firstGame/Android/funs0012/0.1.0.41/serverUnknown/22f9654c5ed59f08ffd91118b92cf/userUnknown/1(/playerid)/Start
 func decode_func(line string) (v doc) {
 	fields := split_fields(line) // fields[10] = keyword
-	if len(fields) < 11 {
-		log.Println(line)
+	if len(fields) < 9 {
 		return
 	}
 	v = make(doc)
-	var names = []string{"game", "client", "distributor", "version", "server", "dev", "uid", "seq", "player"}
+	var names = []string{"game", "os", "distributor", "version", "server", "dev", "uid", "seq", "player"}
 	for idx, name := range names {
-		v[name] = fields[idx+1] // ignore the first empty field
+		v[name] = fields[idx] // ignore the first empty field
 	}
-	if fields[5] == "serverUnknown" {
+	if fields[4] == "serverUnknown" {
 		v["server"] = "-"
 	}
-	if fields[7] == "userUnknown" {
+	if fields[6] == "userUnknown" {
 		v["uid"] = "-"
 	}
-	v.merge(decode_version(fields[4]))
-	v["seq"], _ = iconvert(fields[8])
-	if p, ok := iconvert(fields[9]); ok {
+	v.merge(decode_version(fields[3]))
+	v["seq"], _ = iconvert(fields[7])
+	var method_idx = 9
+	if p, ok := iconvert(fields[8]); ok && len(fields) > 9 {
 		v["player"] = p
 	} else {
-		log.Println(line)
-		return
+		v["player"] = -1
+		method_idx = 8
 	}
-	key := strings.ToLower(fields[10])
-	v["type"] = "access/" + key
+	key := strings.ToLower(fields[method_idx])
+	v["type"] = "nginx-" + key
 
 	if decoder, ok := decoders[key]; ok {
-		v.merge(decoder(fields[11:]))
+		v.merge(decoder(fields[method_idx+1:]))
 	}
 	return
 }
 
 func split_fields(line string) (v []string) {
-	scaner := bufio.NewScanner(strings.NewReader(line))
-	scaner.Split(by_slash_vertical)
-	for scaner.Scan() {
-		v = append(v, scaner.Text())
-	}
-	return
+	return strings.FieldsFunc(line, func(r rune) bool {
+		return r == '/' || r == '|'
+	})
 }
 
 func by_slash_vertical(data []byte, ateof bool) (advance int, token []byte, err error) {
@@ -114,6 +129,10 @@ func by_slash_vertical(data []byte, ateof bool) (advance int, token []byte, err 
 }
 func sconvert(s string) (interface{}, bool) {
 	return s, true
+}
+func iconvert2(s string) interface{} {
+	v, _ := strconv.Atoi(s)
+	return v
 }
 func iconvert(s string) (interface{}, bool) {
 	if v, err := strconv.Atoi(s); err == nil {
