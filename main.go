@@ -82,7 +82,7 @@ func main() {
 func handle_connection(conn net.Conn) {
 	log.Println("client-start", conn.RemoteAddr())
 	defer conn.Close()
-	doc_chan := make(chan doc, 32)
+	doc_chan := make(chan doc, 128)
 	defer close(doc_chan)
 	//	go redis_pub(doc_chan, conn)
 	//	go zmq_push(doc_chan, conn)
@@ -133,8 +133,8 @@ func decode_document(body doc) (v doc) {
 		v = decode_document_by_words(body)
 	}
 	if v == nil {
-		v = doc{"content": body["content"]}
-		verbose(v)
+		v = doc{"content": body["content"].(string)}
+		//		verbose(v)
 	}
 	// v would be ignored
 	if v != nil && len(v) == 0 {
@@ -142,9 +142,6 @@ func decode_document(body doc) (v doc) {
 	}
 	v["tag"] = body["tag"]
 	v["hostname"] = body["hostname"]
-	if _, ok := v["type"].(string); !ok {
-		v["type"] = option.dft_type
-	}
 	return
 }
 

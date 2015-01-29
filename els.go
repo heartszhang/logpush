@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/mattbaird/elastigo/lib"
 )
@@ -19,10 +20,16 @@ func els_post(channel chan doc, conn net.Conn) {
 	els.SetHosts(hosts)
 
 	for doc := range channel {
-		if dtype, ok := doc["type"].(string); ok {
-			if _, err := els.Index(option.index_prefix, dtype, "", nil, doc); err != nil {
-				log.Println("index", doc, err)
-			}
+		dtype, ok := doc["type"].(string)
+		if !ok {
+			dtype = option.dft_type
+			verbose(doc)
+		}
+		if _, ok := doc["time"].(time.Time); !ok {
+			doc["time"] = time.Now()
+		}
+		if _, err := els.Index(option.index_prefix, dtype, "", nil, doc); err != nil {
+			log.Println("index", doc, err)
 		}
 	}
 }

@@ -77,10 +77,10 @@ func db_msg_socket(line string) (v doc) {
 //login2: \{.*\}
 //url3: https?://[^\]]+
 //data4: \d+
-var login_re = regexp.MustCompile(`([a-zA-Z0-9]+/[a-zA-Z0-9]+) \[... (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] LOGIN :(\{.*\}), post url\[(https?://[^\]]+)\] data\[(\d+)\]`)
+var dml = regexp.MustCompile(`([a-zA-Z0-9]+/[a-zA-Z0-9]+) \[... (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] LOGIN :(\{.*\}), post url\[(https?://[^\]]+)\] data\[(\d+)\]`)
 
 func db_msg_login(line string) (v doc) {
-	fields := login_re.FindStringSubmatch(line)
+	fields := dml.FindStringSubmatch(line)
 	if len(fields) < 6 {
 		return
 	}
@@ -100,33 +100,6 @@ func db_msg_login(line string) (v doc) {
 	}
 
 	return
-}
-
-//33EDAE8/8027C03D [ERR 2015-01-27 16:00:38] LOGIN :{"id":1422345637,"state":{"code":1,"msg":"操作成功"},"data":{"ucid":789994237,"nickName":"九游玩家789994237"}}, post url[http://sdk.g.uc.cn/ss/] data[789994237]
-//(path0) [... (time1)] LOGIN :(login2), post url[(url3)] data[(data4)]
-//path0: [a-zA-Z0-9]+/[a-zA-Z0-9]+
-//time1: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}
-//login2: \{.*\}
-//url3: https?://[^\]]+
-//data4: \d+
-const login_rexp = `([a-zA-Z0-9]+/[a-zA-Z0-9]+) [... (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})] LOGIN :(\{.*\}), post url[(https?://[^\]]+)] data[(\d+)]`
-
-var login_re = regexp.MustCompile(`([a-zA-Z0-9]+/[a-zA-Z0-9]+) [... (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})] LOGIN :(\{.*\}), post url[(https?://[^\]]+)] data[(\d+)]`)
-
-func db_msg_login(line string) (v doc) {
-	fields := login_re.FindStringSubmatch(line)
-	fields := strings.FieldsFunc(line, func(r rune) bool {
-		return r == ' ' || r == '=' || r == ','
-	})
-	if len(fields) < 10 {
-		return
-	}
-	return doc{
-		"path": fields[0],
-		"type": "socket",
-		"cnt":  iconvert2(fields[5]),
-		"free", iconvert2(fields[9]),
-	}
 }
 
 //24CCE4E8/EAA5104B 2015-01-26-180114 award-msg-num 123 click-msg-num 3 tips-msg-num 0 chat-msg-num 0
